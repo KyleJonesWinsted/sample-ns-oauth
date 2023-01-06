@@ -1,0 +1,38 @@
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetSuite Oauth 2.0</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="data">
+        <label for="client-id">Client ID</label>
+        <input type="text" name="client-id" id="client-id">
+
+        <label for="client-secret">Client Secret</label>
+        <input type="text" name="client-secret" id="client-secret">
+
+        <label for="scope">Scope</label>
+        <input type="text" name="scope" id="scope">
+
+        <label for="auth-code">Authorization Code</label>
+        <p id="auth-code"></p>
+        <button id="auth-button">Get New Code</button>
+
+        <label for="access-token">Access Token</label>
+        <p id="access-token"></p>
+        <button id="token-button">Get New Token</button>
+
+        <label for="refresh-token">Refresh Token</label>
+        <p id="refresh-token"></p>
+        <button id="refresh-button">Refresh Access Token</button>
+
+        <script src="script.js"></script>
+    </div>
+</body>
+
+</html>

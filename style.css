@@ -1,0 +1,9 @@
+#data {
+    padding: 50px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+input {
+    grid-column: 2 / span 2;
+}
