@@ -20,7 +20,6 @@
   "homepage": "https://github.com/KyleJonesWinsted/sample-ns-oauth#readme",
   "dependencies": {
     "express": "^4.18.2",
-    "node-fetch": "^3.3.0",
     "pkg": "^5.8.0"
   },
   "devDependencies": {
