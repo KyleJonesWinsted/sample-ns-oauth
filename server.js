@@ -209,10 +209,10 @@ function ResultsPage(response, grant, grantType, entity) {
         <b>Entity</b>
         <p>${entity}</p>
 
-        <a href="/netsuite-oauth/employee/${entity}/${response.access_token}" target="_blank">Fetch Employee</a>
+        <a href="./employee/${entity}/${response.access_token}" target="_blank">Fetch Employee</a>
 
-        <a href="/netsuite-oauth?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>
-        <a href="/netsuite-oauth/">Start Over</a>
+        <a href="./?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>
+        <a href="./">Start Over</a>
     </body>
     </html>
     `;
