@@ -43,24 +43,6 @@ app.get('/employee/:id/:token', async (req, res) => {
 app.listen(3000, () => {
     console.log('listening on port 3000');
 });
-function fetchEmployee(id, token) {
-    let data = '';
-    return new Promise((resolve, reject) => {
-        const req = https_1.default.request({
-            hostname: `${ACCOUNT}.suitetalk.api.netsuite.com`,
-            path: `/services/rest/record/v1/employee/${id}`,
-            method: 'GET',
-            headers: {
-                Authorization: `Bearer ${token}`
-            },
-        }, (res) => {
-            res.on('data', (d) => data += d);
-            res.on('end', () => resolve(data));
-            res.on('error', (e) => reject(e));
-        });
-        req.end();
-    });
-}
 function createAuthCodeUrl() {
     const baseUrl = `https://${ACCOUNT}.app.netsuite.com/app/login/oauth2/authorize.nl`;
     const params = new url_1.URLSearchParams({
@@ -107,12 +89,30 @@ async function fetchAccessToken(grant, grantType) {
         'Content-Length': body.length,
         Authorization: createBasicAuthString(),
     };
-    const response = await postRequest(body, headers);
+    const response = await tokenRequest(body, headers);
     if (response.status > 299)
         throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
     return JSON.parse(response.data);
 }
-function postRequest(body, headers) {
+function fetchEmployee(id, token) {
+    let data = '';
+    return new Promise((resolve, reject) => {
+        const req = https_1.default.request({
+            hostname: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+            path: `/services/rest/record/v1/employee/${id}`,
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`
+            },
+        }, (res) => {
+            res.on('data', (d) => data += d);
+            res.on('end', () => resolve(data));
+            res.on('error', (e) => reject(e));
+        });
+        req.end();
+    });
+}
+function tokenRequest(body, headers) {
     let data = '';
     return new Promise((resolve, reject) => {
         const req = https_1.default.request({
@@ -147,6 +147,8 @@ function generateUUID() {
     });
 }
 function ResultsPage(response, grant, grantType, entity) {
+    const authCode = grantType === 'authorization_code' ? grant : 'N/A';
+    const refreshToken = grantType === 'refresh_token' ? grant : response.refresh_token;
     return /*html*/ `
     <html lang="en">
     <head>
@@ -154,6 +156,33 @@ function ResultsPage(response, grant, grantType, entity) {
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>NS OAuth 2.0</title>
+        <style>
+            * {
+                font-family: sans-serif;
+            }
+
+            body {
+                padding: 25px;
+                display: grid;
+                grid-template-columns: 185px 1fr;
+            }
+
+            a {
+                display: block;
+                margin: 15px;
+                grid-column: 1 / 3;
+                font-size: large;
+                text-align: center;
+            }
+
+            p {
+                word-break: break-all;
+            }
+
+            b {
+                margin: auto 0;
+            }
+        </style>
     </head>
     <body>
         <b>Client ID</b>
@@ -168,21 +197,21 @@ function ResultsPage(response, grant, grantType, entity) {
         <b>Redirect URI</b>
         <p>${REDIRECT_URI}</p>
 
-        <b>${grantType === 'authorization_code' ? 'Authorization Code' : 'Old Refresh Token'}</b>
-        <p>${grant}</p>
+        <b>Authorization Code</b>
+        <p>${authCode}</p>
 
         <b>Access Token</b>
         <p>${response.access_token}</p>
 
         <b>Refresh Token</b>
-        <p>${response.refresh_token}</p>
+        <p>${refreshToken}</p>
 
         <b>Entity</b>
         <p>${entity}</p>
 
         <a href="/netsuite-oauth/employee/${entity}/${response.access_token}" target="_blank">Fetch Employee</a>
 
-        <a href="/netsuite-oauth?refresh=${response.refresh_token}&entity=${entity}">Refresh Access Token</a>
+        <a href="/netsuite-oauth?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>
         <a href="/netsuite-oauth/">Start Over</a>
     </body>
     </html>
