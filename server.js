@@ -61,14 +61,14 @@ function createAuthCodeUrl() {
         client_id: CLIENT_ID,
         redirect_uri: REDIRECT_URI,
         scope: SCOPE,
-        state: generateUUID(),
+        state: crypto_1.default.randomUUID(),
     });
     console.log(params);
     return baseUrl + '?' + params.toString();
 }
 function createAuthCodeUrlWithPKCE() {
     const baseUrl = `https://${ACCOUNT}.app.netsuite.com/app/login/oauth2/authorize.nl`;
-    const state = generateUUID();
+    const state = crypto_1.default.randomUUID();
     const verifier = generateCodeVerifier(state);
     const challenge = crypto_1.default.createHash('sha256').update(verifier).digest('base64url');
     const params = new url_1.URLSearchParams({
@@ -83,17 +83,8 @@ function createAuthCodeUrlWithPKCE() {
     console.log(params);
     return baseUrl + '?' + params.toString();
 }
-function generateUUID() {
-    let d = new Date().getTime();
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        let r = Math.random() * 16;
-        r = (d + r) % 16 | 0;
-        d = Math.floor(d / 16);
-        return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
-    });
-}
 function generateCodeVerifier(state) {
-    const code = generateUUID() + generateUUID();
+    const code = crypto_1.default.randomUUID() + crypto_1.default.randomUUID();
     CODE_VERIFIERS[state] = code;
     return code;
 }
