@@ -60,6 +60,7 @@ function createAuthCodeUrl() {
         scope: SCOPE,
         state: generateUUID(),
     });
+    console.log(params);
     return baseUrl + '?' + params.toString();
 }
 function createAuthCodeUrlWithPKCE() {
@@ -76,6 +77,7 @@ function createAuthCodeUrlWithPKCE() {
         code_challenge: challenge,
         code_challenge_method: 'S256'
     });
+    console.log(params);
     return baseUrl + '?' + params.toString();
 }
 async function handleTokenRequest({ grant, grantType, res, entity, state }) {
@@ -115,6 +117,7 @@ async function fetchAccessToken(grant, grantType) {
         'Content-Length': body.length,
         Authorization: createBasicAuthString(),
     };
+    console.log({ headers, body });
     const response = await tokenRequest(body, headers);
     if (response.status > 299)
         throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
@@ -133,6 +136,7 @@ async function fetchAccessTokenWithPKCE(grant, grantType, state) {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': body.length,
     };
+    console.log({ headers, body });
     const response = await tokenRequest(body, headers);
     if (response.status > 299)
         throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);

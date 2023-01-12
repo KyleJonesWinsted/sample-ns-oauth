@@ -4,22 +4,6 @@ import { URLSearchParams } from 'url';
 import { isNativeError } from 'util/types';
 import crypto from 'crypto';
 
-type TokenData = {
-    access_token: string;
-    refresh_token: string;
-    expires_in: 3600;
-    token_type: 'bearer';
-    id_token: unknown;
-}
-
-type PostResponse = {
-    status: number;
-    statusText: string;
-    data: string;
-};
-
-type GrantType = 'authorization_code' | 'refresh_token';
-
 const app = express();
 
 const CLIENT_ID = process.env.NS_CLIENT!;
@@ -27,7 +11,7 @@ const CLIENT_SECRET = process.env.NS_SECRET!;
 const SCOPE = process.env.NS_SCOPE!;
 const ACCOUNT = process.env.NS_ACCOUNT!;
 const REDIRECT_URI = process.env.NS_REDIRECT_URI!;
-const USE_PKCE = process.env.NS_USE_PKCE!;
+const USE_PKCE = process.env.NS_USE_PKCE;
 
 const CODE_VERIFIERS: Record<string, string> = {};
 
@@ -69,6 +53,10 @@ app.listen(3000, () => {
     console.log('listening on port 3000');
 });
 
+/**
+ * STEP ONE: Get Authorization Code
+ */
+
 function createAuthCodeUrl(): string {
     const baseUrl = `https://${ACCOUNT}.app.netsuite.com/app/login/oauth2/authorize.nl`;
     const params = new URLSearchParams({
@@ -78,6 +66,7 @@ function createAuthCodeUrl(): string {
         scope: SCOPE,
         state: generateUUID(),
     });
+    console.log(params);
     return baseUrl + '?' + params.toString();
 }
 
@@ -95,10 +84,30 @@ function createAuthCodeUrlWithPKCE(): string {
         code_challenge: challenge,
         code_challenge_method: 'S256'
     });
+    console.log(params);
     return baseUrl + '?' + params.toString();
 }
 
-type HandleTokenRequestParams = { grant: string; grantType: GrantType; res: express.Response; entity: string; state: string; };
+function generateUUID(): string {
+    let d = new Date().getTime();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        let r = Math.random() * 16;
+        r = (d + r) % 16 | 0;
+        d = Math.floor(d / 16);
+        return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
+    });
+}
+
+function generateCodeVerifier(state: string): string {
+    const code = generateUUID() + generateUUID();
+    CODE_VERIFIERS[state] = code;
+    return code;
+}
+
+/**
+ * STEP TWO: Get Access Token
+ */
+
 
 async function handleTokenRequest({ grant, grantType, res, entity, state }: HandleTokenRequestParams): Promise<void> {
     try {
@@ -109,19 +118,6 @@ async function handleTokenRequest({ grant, grantType, res, entity, state }: Hand
         res.send(ResultsPage(response, grant, grantType, entity));
     } catch (err) {
         handleError(err, res);
-    }
-}
-
-function handleError(err: unknown, res: express.Response<any, Record<string, any>>) {
-    console.error(err);
-    if (isNativeError(err)) {
-        res.send(/*html*/ `
-                <h1>${err.name}</h1>
-                <p>${err.message}</p>
-                <p>${err.stack ?? 'No Stack'}</p>
-            `);
-    } else {
-        res.send('An error occurred: ' + JSON.stringify(err));
     }
 }
 
@@ -137,6 +133,7 @@ async function fetchAccessToken(grant: string, grantType: GrantType): Promise<To
         'Content-Length': body.length,
         Authorization: createBasicAuthString(),
     };
+    console.log({ headers, body });
     const response = await tokenRequest(body, headers);
     if (response.status > 299) throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
     return JSON.parse(response.data) as TokenData;
@@ -155,28 +152,15 @@ async function fetchAccessTokenWithPKCE(grant: string, grantType: GrantType, sta
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': body.length,
     };
+    console.log({ headers, body });
     const response = await tokenRequest(body, headers);
     if (response.status > 299) throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
     return JSON.parse(response.data) as TokenData;
 }
 
-function fetchEmployee(id: string, token: string): Promise<string> {
-    let data = '';
-    return new Promise((resolve, reject) => {
-        const req = https.request({
-            hostname: `${ACCOUNT}.suitetalk.api.netsuite.com`,
-            path: `/services/rest/record/v1/employee/${id}`,
-            method: 'GET',
-            headers: {
-                Authorization: `Bearer ${token}`
-            },
-        }, (res) => {
-            res.on('data', (d) => data += d);
-            res.on('end', () => resolve(data));
-            res.on('error', (e) => reject(e));
-        });
-        req.end();
-    });
+function createBasicAuthString(): string {
+    const authStr = `${CLIENT_ID}:${CLIENT_SECRET}`;
+    return `Basic ${Buffer.from(authStr).toString('base64')}`;
 }
 
 function tokenRequest(body: string, headers: Record<string, any>): Promise<PostResponse> {
@@ -201,25 +185,44 @@ function tokenRequest(body: string, headers: Record<string, any>): Promise<PostR
     });
 }
 
-function createBasicAuthString(): string {
-    const authStr = `${CLIENT_ID}:${CLIENT_SECRET}`;
-    return `Basic ${Buffer.from(authStr).toString('base64')}`;
-}
+/**
+ * STEP THREE: Fetch Data from NetSuite
+ */
 
-function generateUUID(): string {
-    let d = new Date().getTime();
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        let r = Math.random() * 16;
-        r = (d + r) % 16 | 0;
-        d = Math.floor(d / 16);
-        return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
+function fetchEmployee(id: string, token: string): Promise<string> {
+    let data = '';
+    return new Promise((resolve, reject) => {
+        const req = https.request({
+            hostname: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+            path: `/services/rest/record/v1/employee/${id}`,
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`
+            },
+        }, (res) => {
+            res.on('data', (d) => data += d);
+            res.on('end', () => resolve(data));
+            res.on('error', (e) => reject(e));
+        });
+        req.end();
     });
 }
 
-function generateCodeVerifier(state: string): string {
-    const code = generateUUID() + generateUUID();
-    CODE_VERIFIERS[state] = code;
-    return code;
+/**
+ * MISC FUNCTIONS AND TYPES
+ */
+
+function handleError(err: unknown, res: express.Response<any, Record<string, any>>) {
+    console.error(err);
+    if (isNativeError(err)) {
+        res.send(/*html*/ `
+                <h1>${err.name}</h1>
+                <p>${err.message}</p>
+                <p>${err.stack ?? 'No Stack'}</p>
+            `);
+    } else {
+        res.send('An error occurred: ' + JSON.stringify(err));
+    }
 }
 
 function ResultsPage(response: TokenData, grant: string, grantType: GrantType, entity: string): string {
@@ -293,3 +296,22 @@ function ResultsPage(response: TokenData, grant: string, grantType: GrantType, e
     </html>
     `;
 }
+
+type TokenData = {
+    access_token: string;
+    refresh_token: string;
+    expires_in: 3600;
+    token_type: 'bearer';
+    id_token: unknown;
+}
+
+type PostResponse = {
+    status: number;
+    statusText: string;
+    data: string;
+};
+
+type GrantType = 'authorization_code' | 'refresh_token';
+
+type HandleTokenRequestParams = { grant: string; grantType: GrantType; res: express.Response; entity: string; state: string; };
+
