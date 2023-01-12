@@ -30,10 +30,10 @@ app.get('/', (req, res) => {
         return handleError(error, res);
     }
     if (authCode) {
-        return handleTokenRequest({ grant: authCode, grantType: 'authorization_code', res, entity, state });
+        return handleTokenRequest(res, { grant: authCode, grantType: 'authorization_code', entity, state });
     }
     if (refreshToken) {
-        return handleTokenRequest({ grant: refreshToken, grantType: 'refresh_token', res, entity, state });
+        return handleTokenRequest(res, { grant: refreshToken, grantType: 'refresh_token', entity, state });
     }
     const authCodeUrl = USE_PKCE ? createAuthCodeUrlWithPKCE() : createAuthCodeUrl();
     res.redirect(authCodeUrl);
@@ -109,13 +109,14 @@ function generateCodeVerifier(state: string): string {
  */
 
 
-async function handleTokenRequest({ grant, grantType, res, entity, state }: HandleTokenRequestParams): Promise<void> {
+async function handleTokenRequest(res: express.Response, params: RequestParams): Promise<void> {
+    const { grant, grantType, state } = params;
     try {
         const response = USE_PKCE
             ? await fetchAccessTokenWithPKCE(grant, grantType, state)
             : await fetchAccessToken(grant, grantType);
         res.setHeader('Content-Type', 'text/html');
-        res.send(ResultsPage(response, grant, grantType, entity));
+        res.send(ResultsPage(response, params));
     } catch (err) {
         handleError(err, res);
     }
@@ -225,7 +226,8 @@ function handleError(err: unknown, res: express.Response<any, Record<string, any
     }
 }
 
-function ResultsPage(response: TokenData, grant: string, grantType: GrantType, entity: string): string {
+function ResultsPage(response: TokenData, params: RequestParams): string {
+    const { grantType, grant, entity, state } = params;
     const authCode = grantType === 'authorization_code' ? grant : 'N/A';
     const refreshToken = grantType === 'refresh_token' ? grant : response.refresh_token;
     return /*html*/`
@@ -279,6 +281,12 @@ function ResultsPage(response: TokenData, grant: string, grantType: GrantType, e
         <b>Authorization Code</b>
         <p>${authCode}</p>
 
+        <b>State</b>
+        <p>${state ?? 'N/A'}</p>
+
+        <b>Code Verifier</b>
+        <p>${CODE_VERIFIERS[state] ?? 'N/A'}</p>
+
         <b>Access Token</b>
         <p>${response.access_token}</p>
 
@@ -313,5 +321,5 @@ type PostResponse = {
 
 type GrantType = 'authorization_code' | 'refresh_token';
 
-type HandleTokenRequestParams = { grant: string; grantType: GrantType; res: express.Response; entity: string; state: string; };
+type RequestParams = { grant: string; grantType: GrantType; entity: string; state: string; };
 

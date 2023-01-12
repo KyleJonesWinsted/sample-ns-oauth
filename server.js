@@ -30,10 +30,10 @@ app.get('/', (req, res) => {
         return handleError(error, res);
     }
     if (authCode) {
-        return handleTokenRequest({ grant: authCode, grantType: 'authorization_code', res, entity, state });
+        return handleTokenRequest(res, { grant: authCode, grantType: 'authorization_code', entity, state });
     }
     if (refreshToken) {
-        return handleTokenRequest({ grant: refreshToken, grantType: 'refresh_token', res, entity, state });
+        return handleTokenRequest(res, { grant: refreshToken, grantType: 'refresh_token', entity, state });
     }
     const authCodeUrl = USE_PKCE ? createAuthCodeUrlWithPKCE() : createAuthCodeUrl();
     res.redirect(authCodeUrl);
@@ -51,6 +51,9 @@ app.get('/employee/:id/:token', async (req, res) => {
 app.listen(3000, () => {
     console.log('listening on port 3000');
 });
+/**
+ * STEP ONE: Get Authorization Code
+ */
 function createAuthCodeUrl() {
     const baseUrl = `https://${ACCOUNT}.app.netsuite.com/app/login/oauth2/authorize.nl`;
     const params = new url_1.URLSearchParams({
@@ -80,29 +83,34 @@ function createAuthCodeUrlWithPKCE() {
     console.log(params);
     return baseUrl + '?' + params.toString();
 }
-async function handleTokenRequest({ grant, grantType, res, entity, state }) {
+function generateUUID() {
+    let d = new Date().getTime();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        let r = Math.random() * 16;
+        r = (d + r) % 16 | 0;
+        d = Math.floor(d / 16);
+        return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
+    });
+}
+function generateCodeVerifier(state) {
+    const code = generateUUID() + generateUUID();
+    CODE_VERIFIERS[state] = code;
+    return code;
+}
+/**
+ * STEP TWO: Get Access Token
+ */
+async function handleTokenRequest(res, params) {
+    const { grant, grantType, state } = params;
     try {
         const response = USE_PKCE
             ? await fetchAccessTokenWithPKCE(grant, grantType, state)
             : await fetchAccessToken(grant, grantType);
         res.setHeader('Content-Type', 'text/html');
-        res.send(ResultsPage(response, grant, grantType, entity));
+        res.send(ResultsPage(response, params));
     }
     catch (err) {
         handleError(err, res);
-    }
-}
-function handleError(err, res) {
-    console.error(err);
-    if ((0, types_1.isNativeError)(err)) {
-        res.send(/*html*/ `
-                <h1>${err.name}</h1>
-                <p>${err.message}</p>
-                <p>${err.stack ?? 'No Stack'}</p>
-            `);
-    }
-    else {
-        res.send('An error occurred: ' + JSON.stringify(err));
     }
 }
 async function fetchAccessToken(grant, grantType) {
@@ -142,23 +150,9 @@ async function fetchAccessTokenWithPKCE(grant, grantType, state) {
         throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
     return JSON.parse(response.data);
 }
-function fetchEmployee(id, token) {
-    let data = '';
-    return new Promise((resolve, reject) => {
-        const req = https_1.default.request({
-            hostname: `${ACCOUNT}.suitetalk.api.netsuite.com`,
-            path: `/services/rest/record/v1/employee/${id}`,
-            method: 'GET',
-            headers: {
-                Authorization: `Bearer ${token}`
-            },
-        }, (res) => {
-            res.on('data', (d) => data += d);
-            res.on('end', () => resolve(data));
-            res.on('error', (e) => reject(e));
-        });
-        req.end();
-    });
+function createBasicAuthString() {
+    const authStr = `${CLIENT_ID}:${CLIENT_SECRET}`;
+    return `Basic ${Buffer.from(authStr).toString('base64')}`;
 }
 function tokenRequest(body, headers) {
     let data = '';
@@ -181,25 +175,45 @@ function tokenRequest(body, headers) {
         req.end();
     });
 }
-function createBasicAuthString() {
-    const authStr = `${CLIENT_ID}:${CLIENT_SECRET}`;
-    return `Basic ${Buffer.from(authStr).toString('base64')}`;
-}
-function generateUUID() {
-    let d = new Date().getTime();
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        let r = Math.random() * 16;
-        r = (d + r) % 16 | 0;
-        d = Math.floor(d / 16);
-        return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
+/**
+ * STEP THREE: Fetch Data from NetSuite
+ */
+function fetchEmployee(id, token) {
+    let data = '';
+    return new Promise((resolve, reject) => {
+        const req = https_1.default.request({
+            hostname: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+            path: `/services/rest/record/v1/employee/${id}`,
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`
+            },
+        }, (res) => {
+            res.on('data', (d) => data += d);
+            res.on('end', () => resolve(data));
+            res.on('error', (e) => reject(e));
+        });
+        req.end();
     });
 }
-function generateCodeVerifier(state) {
-    const code = generateUUID() + generateUUID();
-    CODE_VERIFIERS[state] = code;
-    return code;
+/**
+ * MISC FUNCTIONS AND TYPES
+ */
+function handleError(err, res) {
+    console.error(err);
+    if ((0, types_1.isNativeError)(err)) {
+        res.send(/*html*/ `
+                <h1>${err.name}</h1>
+                <p>${err.message}</p>
+                <p>${err.stack ?? 'No Stack'}</p>
+            `);
+    }
+    else {
+        res.send('An error occurred: ' + JSON.stringify(err));
+    }
 }
-function ResultsPage(response, grant, grantType, entity) {
+function ResultsPage(response, params) {
+    const { grantType, grant, entity, state } = params;
     const authCode = grantType === 'authorization_code' ? grant : 'N/A';
     const refreshToken = grantType === 'refresh_token' ? grant : response.refresh_token;
     return /*html*/ `
@@ -252,6 +266,12 @@ function ResultsPage(response, grant, grantType, entity) {
 
         <b>Authorization Code</b>
         <p>${authCode}</p>
+
+        <b>State</b>
+        <p>${state ?? 'N/A'}</p>
+
+        <b>Code Verifier</b>
+        <p>${CODE_VERIFIERS[state] ?? 'N/A'}</p>
 
         <b>Access Token</b>
         <p>${response.access_token}</p>
