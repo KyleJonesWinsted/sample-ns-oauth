@@ -7,27 +7,35 @@ const express_1 = __importDefault(require("express"));
 const https_1 = __importDefault(require("https"));
 const url_1 = require("url");
 const types_1 = require("util/types");
+const crypto_1 = __importDefault(require("crypto"));
 const app = (0, express_1.default)();
 const CLIENT_ID = process.env.NS_CLIENT;
 const CLIENT_SECRET = process.env.NS_SECRET;
 const SCOPE = process.env.NS_SCOPE;
 const ACCOUNT = process.env.NS_ACCOUNT;
 const REDIRECT_URI = process.env.NS_REDIRECT_URI;
+const USE_PKCE = process.env.NS_USE_PKCE;
+const CODE_VERIFIERS = {};
 app.use((req) => {
     console.log('request from', req.url);
     req.next?.();
 });
 app.get('/', (req, res) => {
+    const error = req.query.error;
     const authCode = req.query.code;
     const refreshToken = req.query.refresh;
     const entity = req.query.entity;
+    const state = req.query.state;
+    if (error) {
+        return handleError(error, res);
+    }
     if (authCode) {
-        return handleTokenRequest(authCode, 'authorization_code', res, entity);
+        return handleTokenRequest({ grant: authCode, grantType: 'authorization_code', res, entity, state });
     }
     if (refreshToken) {
-        return handleTokenRequest(refreshToken, 'refresh_token', res, entity);
+        return handleTokenRequest({ grant: refreshToken, grantType: 'refresh_token', res, entity, state });
     }
-    const authCodeUrl = createAuthCodeUrl();
+    const authCodeUrl = USE_PKCE ? createAuthCodeUrlWithPKCE() : createAuthCodeUrl();
     res.redirect(authCodeUrl);
 });
 app.get('/employee/:id/:token', async (req, res) => {
@@ -54,9 +62,27 @@ function createAuthCodeUrl() {
     });
     return baseUrl + '?' + params.toString();
 }
-async function handleTokenRequest(grant, grantType, res, entity) {
+function createAuthCodeUrlWithPKCE() {
+    const baseUrl = `https://${ACCOUNT}.app.netsuite.com/app/login/oauth2/authorize.nl`;
+    const state = generateUUID();
+    const verifier = generateCodeVerifier(state);
+    const challenge = crypto_1.default.createHash('sha256').update(verifier).digest('base64url');
+    const params = new url_1.URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPE,
+        state,
+        code_challenge: challenge,
+        code_challenge_method: 'S256'
+    });
+    return baseUrl + '?' + params.toString();
+}
+async function handleTokenRequest({ grant, grantType, res, entity, state }) {
     try {
-        const response = await fetchAccessToken(grant, grantType);
+        const response = USE_PKCE
+            ? await fetchAccessTokenWithPKCE(grant, grantType, state)
+            : await fetchAccessToken(grant, grantType);
         res.setHeader('Content-Type', 'text/html');
         res.send(ResultsPage(response, grant, grantType, entity));
     }
@@ -94,6 +120,24 @@ async function fetchAccessToken(grant, grantType) {
         throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
     return JSON.parse(response.data);
 }
+async function fetchAccessTokenWithPKCE(grant, grantType, state) {
+    const body = new url_1.URLSearchParams({
+        [grantType === 'authorization_code' ? 'code' : 'refresh_token']: grant,
+        grant_type: grantType,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: CODE_VERIFIERS[state],
+        client_id: CLIENT_ID,
+    }).toString();
+    const headers = {
+        Host: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': body.length,
+    };
+    const response = await tokenRequest(body, headers);
+    if (response.status > 299)
+        throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
+    return JSON.parse(response.data);
+}
 function fetchEmployee(id, token) {
     let data = '';
     return new Promise((resolve, reject) => {
@@ -124,8 +168,8 @@ function tokenRequest(body, headers) {
             res.on('data', (d) => data += d);
             res.on('end', () => resolve({
                 data,
-                status: res.statusCode ?? 1000,
-                statusText: res.statusMessage ?? 'No status'
+                status: res.statusCode,
+                statusText: res.statusMessage
             }));
             res.on('error', (e) => reject(e));
         });
@@ -145,6 +189,11 @@ function generateUUID() {
         d = Math.floor(d / 16);
         return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
     });
+}
+function generateCodeVerifier(state) {
+    const code = generateUUID() + generateUUID();
+    CODE_VERIFIERS[state] = code;
+    return code;
 }
 function ResultsPage(response, grant, grantType, entity) {
     const authCode = grantType === 'authorization_code' ? grant : 'N/A';

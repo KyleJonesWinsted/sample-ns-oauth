@@ -2,6 +2,7 @@ import express from 'express';
 import https from 'https';
 import { URLSearchParams } from 'url';
 import { isNativeError } from 'util/types';
+import crypto from 'crypto';
 
 type TokenData = {
     access_token: string;
@@ -26,6 +27,9 @@ const CLIENT_SECRET = process.env.NS_SECRET!;
 const SCOPE = process.env.NS_SCOPE!;
 const ACCOUNT = process.env.NS_ACCOUNT!;
 const REDIRECT_URI = process.env.NS_REDIRECT_URI!;
+const USE_PKCE = process.env.NS_USE_PKCE!;
+
+const CODE_VERIFIERS: Record<string, string> = {};
 
 app.use((req) => {
     console.log('request from', req.url);
@@ -33,16 +37,21 @@ app.use((req) => {
 });
 
 app.get('/', (req, res) => {
+    const error = req.query.error as string;
     const authCode = req.query.code as string;
     const refreshToken = req.query.refresh as string;
     const entity = req.query.entity as string;
+    const state = req.query.state as string;
+    if (error) {
+        return handleError(error, res);
+    }
     if (authCode) {
-        return handleTokenRequest(authCode, 'authorization_code', res, entity);
+        return handleTokenRequest({ grant: authCode, grantType: 'authorization_code', res, entity, state });
     }
     if (refreshToken) {
-        return handleTokenRequest(refreshToken, 'refresh_token', res, entity);
+        return handleTokenRequest({ grant: refreshToken, grantType: 'refresh_token', res, entity, state });
     }
-    const authCodeUrl = createAuthCodeUrl();
+    const authCodeUrl = USE_PKCE ? createAuthCodeUrlWithPKCE() : createAuthCodeUrl();
     res.redirect(authCodeUrl);
 });
 
@@ -72,9 +81,30 @@ function createAuthCodeUrl(): string {
     return baseUrl + '?' + params.toString();
 }
 
-async function handleTokenRequest(grant: string, grantType: GrantType, res: express.Response, entity: string): Promise<void> {
+function createAuthCodeUrlWithPKCE(): string {
+    const baseUrl = `https://${ACCOUNT}.app.netsuite.com/app/login/oauth2/authorize.nl`;
+    const state = generateUUID();
+    const verifier = generateCodeVerifier(state);
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPE,
+        state,
+        code_challenge: challenge,
+        code_challenge_method: 'S256'
+    });
+    return baseUrl + '?' + params.toString();
+}
+
+type HandleTokenRequestParams = { grant: string; grantType: GrantType; res: express.Response; entity: string; state: string; };
+
+async function handleTokenRequest({ grant, grantType, res, entity, state }: HandleTokenRequestParams): Promise<void> {
     try {
-        const response = await fetchAccessToken(grant, grantType);
+        const response = USE_PKCE
+            ? await fetchAccessTokenWithPKCE(grant, grantType, state)
+            : await fetchAccessToken(grant, grantType);
         res.setHeader('Content-Type', 'text/html');
         res.send(ResultsPage(response, grant, grantType, entity));
     } catch (err) {
@@ -112,6 +142,24 @@ async function fetchAccessToken(grant: string, grantType: GrantType): Promise<To
     return JSON.parse(response.data) as TokenData;
 }
 
+async function fetchAccessTokenWithPKCE(grant: string, grantType: GrantType, state: string): Promise<TokenData> {
+    const body = new URLSearchParams({
+        [grantType === 'authorization_code' ? 'code' : 'refresh_token']: grant,
+        grant_type: grantType,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: CODE_VERIFIERS[state],
+        client_id: CLIENT_ID,
+    }).toString();
+    const headers = {
+        Host: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': body.length,
+    };
+    const response = await tokenRequest(body, headers);
+    if (response.status > 299) throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
+    return JSON.parse(response.data) as TokenData;
+}
+
 function fetchEmployee(id: string, token: string): Promise<string> {
     let data = '';
     return new Promise((resolve, reject) => {
@@ -143,8 +191,8 @@ function tokenRequest(body: string, headers: Record<string, any>): Promise<PostR
             res.on('data', (d) => data += d);
             res.on('end', () => resolve({
                 data,
-                status: res.statusCode ?? 1000,
-                statusText: res.statusMessage ?? 'No status'
+                status: res.statusCode!,
+                statusText: res.statusMessage!
             }));
             res.on('error', (e) => reject(e));
         });
@@ -166,6 +214,12 @@ function generateUUID(): string {
         d = Math.floor(d / 16);
         return (c == 'x' ? r : (r & 0x7 | 0x8)).toString(16);
     });
+}
+
+function generateCodeVerifier(state: string): string {
+    const code = generateUUID() + generateUUID();
+    CODE_VERIFIERS[state] = code;
+    return code;
 }
 
 function ResultsPage(response: TokenData, grant: string, grantType: GrantType, entity: string): string {
