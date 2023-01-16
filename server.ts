@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import https from 'https';
 import { URLSearchParams } from 'url';
 import { isNativeError } from 'util/types';
@@ -11,9 +12,15 @@ const CLIENT_SECRET = process.env.NS_SECRET!;
 const SCOPE = process.env.NS_SCOPE!;
 const ACCOUNT = process.env.NS_ACCOUNT!;
 const REDIRECT_URI = process.env.NS_REDIRECT_URI!;
-const USE_PKCE = process.env.NS_USE_PKCE;
 
+// Used only in PKCE flow
+const USE_PKCE = process.env.NS_USE_PKCE;
 const CODE_VERIFIERS: Record<string, string> = {};
+
+// Used only in Client Credentials flow
+const CERTIFICATE_ID = process.env.NS_CERTIFICATE_ID;
+const KEY_PATH = process.env.NS_KEY_PATH;
+const PRIVATE_KEY = KEY_PATH ? fs.readFileSync(KEY_PATH).toString() : '';
 
 app.use((req) => {
     console.log('request from', req.url);
@@ -37,6 +44,23 @@ app.get('/', (req, res) => {
     }
     const authCodeUrl = USE_PKCE ? createAuthCodeUrlWithPKCE() : createAuthCodeUrl();
     res.redirect(authCodeUrl);
+});
+
+app.get('/client-credentials', async (_, res) => {
+    try {
+        const tokenData = await fetchAccessTokenWithClientCredentials();
+        const entity = parseEntityFromToken(tokenData);
+        res.send(ResultsPage(tokenData, {
+            entity,
+            grant: 'N/a',
+            grantType: 'client_credentials',
+            state: 'N/A'
+        }));
+    } catch (err) {
+        console.log(err);
+        handleError(err, res);
+    }
+
 });
 
 app.get('/employee/:id/:token', async (req, res) => {
@@ -122,7 +146,7 @@ async function fetchAccessToken(grant: string, grantType: GrantType): Promise<To
         Host: `${ACCOUNT}.suitetalk.api.netsuite.com`,
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': body.length,
-        Authorization: createBasicAuthString(),
+        Authorization: 'Basic ' + base64Encode(`${CLIENT_ID}:${CLIENT_SECRET}`),
     };
     console.log({ headers, body });
     const response = await tokenRequest(body, headers);
@@ -149,9 +173,47 @@ async function fetchAccessTokenWithPKCE(grant: string, grantType: GrantType, sta
     return JSON.parse(response.data) as TokenData;
 }
 
-function createBasicAuthString(): string {
-    const authStr = `${CLIENT_ID}:${CLIENT_SECRET}`;
-    return `Basic ${Buffer.from(authStr).toString('base64')}`;
+async function fetchAccessTokenWithClientCredentials(): Promise<TokenData> {
+    const body = new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: createClientAssertion(),
+    }).toString();
+    const headers = {
+        Host: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': body.length,
+    };
+    console.log({ headers, body });
+    const response = await tokenRequest(body, headers);
+    if (response.status > 299) throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
+    return JSON.parse(response.data) as TokenData;
+}
+
+function createClientAssertion(): string {
+    const header = base64Encode({
+        typ: 'JWT',
+        alg: 'RS256',
+        kid: CERTIFICATE_ID,
+    }, true);
+    const timestamp = new Date().getTime() / 1000;
+    const payload = base64Encode({
+        iss: CLIENT_ID,
+        scope: SCOPE.replaceAll(' ', ','),
+        aud: `https://${ACCOUNT}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/token`,
+        iat: +timestamp.toFixed(0),
+        exp: +(timestamp + 3000).toFixed(0)
+    }, true);
+    const signature = crypto.createSign('RSA-SHA256')
+        .update(`${header}.${payload}`)
+        .sign({ key: PRIVATE_KEY }, 'base64url')
+        .toString();
+    return `${header}.${payload}.${signature}`;
+}
+
+function base64Encode(data: any, urlSafe: boolean = false): string {
+    const str = typeof data === 'string' ? data : JSON.stringify(data);
+    return Buffer.from(str).toString(urlSafe ? 'base64url' : 'base64');
 }
 
 function tokenRequest(body: string, headers: Record<string, any>): Promise<PostResponse> {
@@ -197,6 +259,12 @@ function fetchEmployee(id: string, token: string): Promise<string> {
         });
         req.end();
     });
+}
+
+function parseEntityFromToken(data: TokenData): string {
+    const payloadString = data.access_token.split('.')[1];
+    const payload: TokenPayload = JSON.parse(Buffer.from(payloadString, 'base64').toString('ascii'));
+    return payload.sub.split(';')[1];
 }
 
 /**
@@ -288,7 +356,10 @@ function ResultsPage(response: TokenData, params: RequestParams): string {
 
         <a href="./employee/${entity}/${response.access_token}" target="_blank">Fetch Employee</a>
 
-        <a href="./?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>
+        ${refreshToken ?
+            /*html*/`<a href="./?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>`
+            : ''
+        }
         <a href="./">Start Over</a>
     </body>
     </html>
@@ -297,10 +368,9 @@ function ResultsPage(response: TokenData, params: RequestParams): string {
 
 type TokenData = {
     access_token: string;
-    refresh_token: string;
+    refresh_token?: string;
     expires_in: 3600;
     token_type: 'bearer';
-    id_token: unknown;
 }
 
 type PostResponse = {
@@ -309,7 +379,18 @@ type PostResponse = {
     data: string;
 };
 
-type GrantType = 'authorization_code' | 'refresh_token';
+type GrantType = 'authorization_code' | 'refresh_token' | 'client_credentials';
 
 type RequestParams = { grant: string; grantType: GrantType; entity: string; state: string; };
+
+type TokenPayload = {
+    sub: string;
+    aud: string[];
+    scope: string[];
+    iss: string;
+    oit: number;
+    exp: number;
+    iat: number;
+    jti: string;
+}
 

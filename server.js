@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const fs_1 = __importDefault(require("fs"));
 const https_1 = __importDefault(require("https"));
 const url_1 = require("url");
 const types_1 = require("util/types");
@@ -14,8 +15,13 @@ const CLIENT_SECRET = process.env.NS_SECRET;
 const SCOPE = process.env.NS_SCOPE;
 const ACCOUNT = process.env.NS_ACCOUNT;
 const REDIRECT_URI = process.env.NS_REDIRECT_URI;
+// Used only in PKCE flow
 const USE_PKCE = process.env.NS_USE_PKCE;
 const CODE_VERIFIERS = {};
+// Used only in Client Credentials flow
+const CERTIFICATE_ID = process.env.NS_CERTIFICATE_ID;
+const KEY_PATH = process.env.NS_KEY_PATH;
+const PRIVATE_KEY = KEY_PATH ? fs_1.default.readFileSync(KEY_PATH).toString() : '';
 app.use((req) => {
     console.log('request from', req.url);
     req.next?.();
@@ -37,6 +43,22 @@ app.get('/', (req, res) => {
     }
     const authCodeUrl = USE_PKCE ? createAuthCodeUrlWithPKCE() : createAuthCodeUrl();
     res.redirect(authCodeUrl);
+});
+app.get('/client-credentials', async (_, res) => {
+    try {
+        const tokenData = await fetchAccessTokenWithClientCredentials();
+        const entity = parseEntityFromToken(tokenData);
+        res.send(ResultsPage(tokenData, {
+            entity,
+            grant: 'N/a',
+            grantType: 'client_credentials',
+            state: 'N/A'
+        }));
+    }
+    catch (err) {
+        console.log(err);
+        handleError(err, res);
+    }
 });
 app.get('/employee/:id/:token', async (req, res) => {
     try {
@@ -114,7 +136,7 @@ async function fetchAccessToken(grant, grantType) {
         Host: `${ACCOUNT}.suitetalk.api.netsuite.com`,
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': body.length,
-        Authorization: createBasicAuthString(),
+        Authorization: 'Basic ' + base64Encode(`${CLIENT_ID}:${CLIENT_SECRET}`),
     };
     console.log({ headers, body });
     const response = await tokenRequest(body, headers);
@@ -141,9 +163,46 @@ async function fetchAccessTokenWithPKCE(grant, grantType, state) {
         throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
     return JSON.parse(response.data);
 }
-function createBasicAuthString() {
-    const authStr = `${CLIENT_ID}:${CLIENT_SECRET}`;
-    return `Basic ${Buffer.from(authStr).toString('base64')}`;
+async function fetchAccessTokenWithClientCredentials() {
+    const body = new url_1.URLSearchParams({
+        grant_type: 'client_credentials',
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: createClientAssertion(),
+    }).toString();
+    const headers = {
+        Host: `${ACCOUNT}.suitetalk.api.netsuite.com`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': body.length,
+    };
+    console.log({ headers, body });
+    const response = await tokenRequest(body, headers);
+    if (response.status > 299)
+        throw new Error(`Error fetching token: ${response.status} ${response.statusText}`);
+    return JSON.parse(response.data);
+}
+function createClientAssertion() {
+    const header = base64Encode({
+        typ: 'JWT',
+        alg: 'RS256',
+        kid: CERTIFICATE_ID,
+    }, true);
+    const timestamp = new Date().getTime() / 1000;
+    const payload = base64Encode({
+        iss: CLIENT_ID,
+        scope: SCOPE.replaceAll(' ', ','),
+        aud: `https://${ACCOUNT}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/token`,
+        iat: +timestamp.toFixed(0),
+        exp: +(timestamp + 3000).toFixed(0)
+    }, true);
+    const signature = crypto_1.default.createSign('RSA-SHA256')
+        .update(`${header}.${payload}`)
+        .sign({ key: PRIVATE_KEY }, 'base64url')
+        .toString();
+    return `${header}.${payload}.${signature}`;
+}
+function base64Encode(data, urlSafe = false) {
+    const str = typeof data === 'string' ? data : JSON.stringify(data);
+    return Buffer.from(str).toString(urlSafe ? 'base64url' : 'base64');
 }
 function tokenRequest(body, headers) {
     let data = '';
@@ -186,6 +245,11 @@ function fetchEmployee(id, token) {
         });
         req.end();
     });
+}
+function parseEntityFromToken(data) {
+    const payloadString = data.access_token.split('.')[1];
+    const payload = JSON.parse(Buffer.from(payloadString, 'base64').toString('ascii'));
+    return payload.sub.split(';')[1];
 }
 /**
  * MISC FUNCTIONS AND TYPES
@@ -275,7 +339,9 @@ function ResultsPage(response, params) {
 
         <a href="./employee/${entity}/${response.access_token}" target="_blank">Fetch Employee</a>
 
-        <a href="./?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>
+        ${refreshToken ?
+        /*html*/ `<a href="./?refresh=${refreshToken}&entity=${entity}">Refresh Access Token</a>`
+        : ''}
         <a href="./">Start Over</a>
     </body>
     </html>
