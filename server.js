@@ -270,7 +270,7 @@ function handleError(err, res) {
 function ResultsPage(response, params) {
     const { grantType, grant, entity, state } = params;
     const authCode = grantType === 'authorization_code' ? grant : 'N/A';
-    const refreshToken = grantType === 'refresh_token' ? grant : response.refresh_token;
+    const refreshToken = response.refresh_token || grant;
     return /*html*/ `
     <html lang="en">
     <head>
