@@ -193,7 +193,7 @@ async function fetchAccessTokenWithClientCredentials(): Promise<TokenData> {
 function createClientAssertion(): string {
     const header = base64Encode({
         typ: 'JWT',
-        alg: 'RS256',
+        alg: 'ES256',
         kid: CERTIFICATE_ID,
     }, true);
     const timestamp = new Date().getTime() / 1000;
@@ -204,9 +204,9 @@ function createClientAssertion(): string {
         iat: +timestamp.toFixed(0),
         exp: +(timestamp + 3000).toFixed(0)
     }, true);
-    const signature = crypto.createSign('RSA-SHA256')
+    const signature = crypto.createSign('sha256')
         .update(`${header}.${payload}`)
-        .sign({ key: PRIVATE_KEY }, 'base64url')
+        .sign({ key: PRIVATE_KEY, dsaEncoding: 'ieee-p1363' }, 'base64url')
         .toString();
     return `${header}.${payload}.${signature}`;
 }
