@@ -154,6 +154,7 @@ async function fetchAccessToken(grant: string, grantType: GrantType): Promise<To
     return JSON.parse(response.data) as TokenData;
 }
 
+// Using this flow requires the "Public" box to be checked, since this function does not send the Client Secret
 async function fetchAccessTokenWithPKCE(grant: string, grantType: GrantType, state: string): Promise<TokenData> {
     const body = new URLSearchParams({
         [grantType === 'authorization_code' ? 'code' : 'refresh_token']: grant,
